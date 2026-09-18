@@ -16,14 +16,26 @@ import {
   School,
   Clock,
   ShieldCheck,
+  ShieldAlert,
+  AlertTriangle,
+  Wand2,
   Sun,
   Sunset,
   Upload,
 } from "lucide-react";
-import { KHBDLessonPlan, LBGItem, SchoolConfig, TeacherInfo, TimetableSlot } from "../types";
+import {
+  KHBDLessonPlan,
+  LBGItem,
+  SchoolConfig,
+  TeacherInfo,
+  TimetableSlot,
+  LBGValidationIssue,
+} from "../types";
 import { exportLBGToWord, exportKHBDToWord, exportTKBToWord } from "../utils/docxExport";
 import { buildTeacherLBGAndKHBD, buildClassLBGAndKHBD } from "../utils/teacherScheduleHelper";
 import { CLASS_GVCN_MAP } from "../data/officialTimetableData";
+import { validateLBGAgainstKHDH } from "../utils/lbgKhdhValidator";
+import { LBGValidationModal } from "./LBGValidationModal";
 
 interface LichBaoGiangViewProps {
   teachers: TeacherInfo[];
@@ -33,6 +45,8 @@ interface LichBaoGiangViewProps {
   classes: string[];
   customPlansMap?: Record<string, KHBDLessonPlan>;
   onSaveCustomPlan?: (plan: KHBDLessonPlan) => void;
+  onSaveMultipleCustomPlans?: (plans: KHBDLessonPlan[]) => void;
+  uploadedKhdhPlans?: KHBDLessonPlan[];
   onOpenKHBDUpload?: () => void;
 }
 
@@ -44,10 +58,15 @@ export const LichBaoGiangView: React.FC<LichBaoGiangViewProps> = ({
   classes,
   customPlansMap = {},
   onSaveCustomPlan,
+  onSaveMultipleCustomPlans,
+  uploadedKhdhPlans,
   onOpenKHBDUpload,
 }) => {
   // Mode: "teacher" (LBG cá nhân của từng GV) or "class" (LBG toàn lớp)
   const [viewMode, setViewMode] = useState<"teacher" | "class">("teacher");
+
+  // Validation modal state
+  const [isValidationModalOpen, setIsValidationModalOpen] = useState<boolean>(false);
 
   // Selected teacher
   const [selectedTeacherId, setSelectedTeacherId] = useState<string>(() => {
@@ -117,6 +136,88 @@ export const LichBaoGiangView: React.FC<LichBaoGiangViewProps> = ({
     });
     return map;
   }, [filteredItems]);
+
+  // Automatic validation of current LBG items against uploaded KHDH / official curriculum
+  const validationReport = useMemo(() => {
+    return validateLBGAgainstKHDH(currentLBGItems, uploadedKhdhPlans, config, customPlansMap);
+  }, [currentLBGItems, uploadedKhdhPlans, config, customPlansMap]);
+
+  // Fix single lesson discrepancy
+  const handleApplyFixSingle = (issue: LBGValidationIssue) => {
+    if (!issue.suggestedFix || !onSaveCustomPlan) return;
+    const planToUpdate: KHBDLessonPlan = {
+      ...(issue.expectedKhdhItem || {}),
+      id: issue.expectedKhdhItem?.id || `plan_fix_${issue.lbgItem.id}`,
+      grade: config.currentGrade,
+      className: issue.lbgItem.className || config.currentClass,
+      teacherName: issue.lbgItem.teacherName || config.currentTeacher,
+      schoolName: config.schoolName,
+      week: config.currentWeek,
+      day: issue.lbgItem.day,
+      dayName: issue.lbgItem.dayName,
+      dateStr: issue.lbgItem.dateStr,
+      session: issue.lbgItem.session,
+      period: issue.lbgItem.period,
+      overallPeriodOfDay: issue.lbgItem.overallPeriodOfDay,
+      subject: issue.lbgItem.subject,
+      subSubject: issue.suggestedFix.subSubject || issue.expectedKhdhItem?.subSubject || "",
+      ppct: issue.suggestedFix.ppctLessonNumber,
+      title: issue.suggestedFix.lessonTitle,
+      goals: issue.expectedKhdhItem?.goals || {
+        specificCompetencies: [],
+        generalCompetencies: [],
+        qualities: [],
+        integration: "",
+      },
+      materials: issue.expectedKhdhItem?.materials || { teacher: [], students: [] },
+      activities: issue.expectedKhdhItem?.activities || [],
+    };
+    onSaveCustomPlan(planToUpdate);
+  };
+
+  // Fix all lesson discrepancies in 1-click
+  const handleApplyFixAll = () => {
+    const plansToUpdate: KHBDLessonPlan[] = [];
+    validationReport.issues.forEach((issue) => {
+      if (issue.suggestedFix) {
+        plansToUpdate.push({
+          ...(issue.expectedKhdhItem || {}),
+          id: issue.expectedKhdhItem?.id || `plan_fix_${issue.lbgItem.id}`,
+          grade: config.currentGrade,
+          className: issue.lbgItem.className || config.currentClass,
+          teacherName: issue.lbgItem.teacherName || config.currentTeacher,
+          schoolName: config.schoolName,
+          week: config.currentWeek,
+          day: issue.lbgItem.day,
+          dayName: issue.lbgItem.dayName,
+          dateStr: issue.lbgItem.dateStr,
+          session: issue.lbgItem.session,
+          period: issue.lbgItem.period,
+          overallPeriodOfDay: issue.lbgItem.overallPeriodOfDay,
+          subject: issue.lbgItem.subject,
+          subSubject: issue.suggestedFix.subSubject || issue.expectedKhdhItem?.subSubject || "",
+          ppct: issue.suggestedFix.ppctLessonNumber,
+          title: issue.suggestedFix.lessonTitle,
+          goals: issue.expectedKhdhItem?.goals || {
+            specificCompetencies: [],
+            generalCompetencies: [],
+            qualities: [],
+            integration: "",
+          },
+          materials: issue.expectedKhdhItem?.materials || { teacher: [], students: [] },
+          activities: issue.expectedKhdhItem?.activities || [],
+        });
+      }
+    });
+
+    if (plansToUpdate.length > 0) {
+      if (onSaveMultipleCustomPlans) {
+        onSaveMultipleCustomPlans(plansToUpdate);
+      } else if (onSaveCustomPlan) {
+        plansToUpdate.forEach((p) => onSaveCustomPlan(p));
+      }
+    }
+  };
 
   const handleSelectTeacher = (teacher: TeacherInfo) => {
     setSelectedTeacherId(teacher.id);
@@ -426,6 +527,83 @@ export const LichBaoGiangView: React.FC<LichBaoGiangViewProps> = ({
         </div>
       </div>
 
+      {/* KHDH Audit & Validation Status Bar */}
+      {validationReport.isValid ? (
+        <div className="bg-emerald-50/90 border border-emerald-300/80 rounded-2xl p-3.5 sm:p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-2xs">
+              <CheckCircle2 className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs sm:text-sm font-bold text-emerald-950">
+                  Lịch Báo Giảng Hợp Lệ: Khớp 100% Kế Hoạch Dạy Học
+                </span>
+                <span className="text-[11px] font-bold bg-emerald-200 text-emerald-900 px-2 py-0.5 rounded-full">
+                  {validationReport.matchCount}/{validationReport.totalChecked - validationReport.skippedCount} tiết chuẩn
+                </span>
+              </div>
+              <p className="text-xs text-emerald-700 mt-0.5">
+                Nguồn đối soát: <strong className="text-emerald-900">{validationReport.khdhSourceName}</strong>
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+            <button
+              onClick={() => setIsValidationModalOpen(true)}
+              className="px-3.5 py-1.5 rounded-xl bg-white border border-emerald-300 hover:bg-emerald-100 text-emerald-800 text-xs font-bold transition cursor-pointer shadow-2xs"
+            >
+              Xem Chi Tiết Đối Soát
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="bg-linear-to-r from-amber-50 via-orange-50 to-amber-50 border border-amber-300 rounded-2xl p-3.5 sm:p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-2xs">
+              <AlertTriangle className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs sm:text-sm font-bold text-amber-950">
+                  Cảnh Báo Sai Lệch Lịch Báo Giảng So Với KHDH
+                </span>
+                <span className="text-xs font-bold bg-amber-200 text-amber-900 px-2 py-0.5 rounded-full">
+                  {validationReport.mismatchCount} tiết chưa khớp
+                </span>
+              </div>
+              <div className="text-xs text-amber-800 mt-0.5 flex items-center gap-3 flex-wrap">
+                <span>
+                  • Lệch tên bài: <strong className="text-rose-700 font-bold">{validationReport.titleMismatchCount} tiết</strong>
+                </span>
+                <span>
+                  • Lệch tiết PPCT: <strong className="text-amber-900 font-bold">{validationReport.ppctMismatchCount} tiết</strong>
+                </span>
+                <span className="text-slate-600 hidden md:inline">
+                  • Nguồn: {validationReport.khdhSourceName}
+                </span>
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 w-full sm:w-auto justify-end flex-wrap">
+            <button
+              onClick={handleApplyFixAll}
+              className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition shadow-xs cursor-pointer flex items-center gap-1.5"
+              title="Tự động sửa toàn bộ tên bài học và số tiết PPCT bị lệch theo KHDH"
+            >
+              <Wand2 className="w-3.5 h-3.5" />
+              <span>Sửa Tất Cả Theo KHDH ({validationReport.mismatchCount})</span>
+            </button>
+            <button
+              onClick={() => setIsValidationModalOpen(true)}
+              className="px-3.5 py-1.5 rounded-xl bg-white border border-amber-300 hover:bg-amber-100 text-amber-900 text-xs font-bold transition cursor-pointer shadow-2xs"
+            >
+              Bảng Đối Soát ({validationReport.mismatchCount})
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Day Filter Toolbar */}
       <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-xs flex items-center gap-2 overflow-x-auto">
         <span className="text-xs font-semibold text-slate-500 mr-1 whitespace-nowrap">Lọc theo thứ:</span>
@@ -559,7 +737,30 @@ export const LichBaoGiangView: React.FC<LichBaoGiangViewProps> = ({
 
                         {/* PPCT */}
                         <td className="p-2.5 border border-slate-200 text-center font-semibold text-amber-800">
-                          {item.isOtherTeacher ? "—" : item.ppctLessonNumber}
+                          {item.isOtherTeacher ? (
+                            "—"
+                          ) : (() => {
+                            const issue = validationReport.issuesMap[item.id];
+                            if (issue && issue.ppctDifference) {
+                              return (
+                                <div className="flex flex-col items-center justify-center gap-1">
+                                  <span className="text-slate-800 font-bold">{item.ppctLessonNumber}</span>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleApplyFixSingle(issue);
+                                    }}
+                                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-100 hover:bg-amber-200 text-amber-900 text-[10px] font-bold border border-amber-300 transition cursor-pointer"
+                                    title={`KHDH chuẩn là Tiết ${issue.expectedKhdhItem?.ppct}. Bấm để đồng bộ theo KHDH`}
+                                  >
+                                    <AlertTriangle className="w-2.5 h-2.5 text-amber-600 shrink-0" />
+                                    <span>KHDH: {issue.expectedKhdhItem?.ppct}</span>
+                                  </button>
+                                </div>
+                              );
+                            }
+                            return item.ppctLessonNumber;
+                          })()}
                         </td>
 
                         {/* Lesson Title: per user requirement: phần GV khác dạy (GV chuyên) vẫn để thông tin GV tên gì, dạy môn gì, không cần ghi tên bài học. */}
@@ -568,9 +769,33 @@ export const LichBaoGiangView: React.FC<LichBaoGiangViewProps> = ({
                             <span className="inline-flex items-center gap-1 text-amber-800 font-semibold italic bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
                               ({item.teacherName} dạy)
                             </span>
-                          ) : (
-                            item.lessonTitle
-                          )}
+                          ) : (() => {
+                            const issue = validationReport.issuesMap[item.id];
+                            if (issue && issue.titleDifference) {
+                              return (
+                                <div className="space-y-1">
+                                  <div className="text-slate-900 font-bold">{item.lessonTitle}</div>
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="inline-flex items-center gap-1 text-[11px] font-bold text-rose-700 bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
+                                      <AlertTriangle className="w-3 h-3 text-rose-500 shrink-0" />
+                                      <span>KHDH: <strong>{issue.expectedKhdhItem?.title}</strong></span>
+                                    </span>
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleApplyFixSingle(issue);
+                                      }}
+                                      className="px-2 py-0.5 text-[10px] font-bold rounded bg-emerald-600 hover:bg-emerald-700 text-white transition cursor-pointer shadow-2xs"
+                                      title="Đồng bộ tên bài này theo đúng KHDH"
+                                    >
+                                      Sửa theo KHDH
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            }
+                            return item.lessonTitle;
+                          })()}
                         </td>
 
                         {/* Ghi chú */}
@@ -592,6 +817,17 @@ export const LichBaoGiangView: React.FC<LichBaoGiangViewProps> = ({
           </table>
         </div>
       </div>
+
+      {/* LBG Validation & Audit Modal */}
+      <LBGValidationModal
+        isOpen={isValidationModalOpen}
+        onClose={() => setIsValidationModalOpen(false)}
+        report={validationReport}
+        config={config}
+        onApplyFixSingle={handleApplyFixSingle}
+        onApplyFixAll={handleApplyFixAll}
+        onOpenKHBDUpload={onOpenKHBDUpload}
+      />
     </div>
   );
 };

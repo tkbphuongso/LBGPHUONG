@@ -39,6 +39,17 @@ export function App() {
   // KHBD / KHDH Upload Modal state
   const [isKHBDUploadOpen, setIsKHBDUploadOpen] = useState<boolean>(false);
 
+  // Uploaded KHDH / KHBD state for validation & synchronization
+  const [uploadedKhdhPlans, setUploadedKhdhPlans] = useState<KHBDLessonPlan[]>(() => {
+    try {
+      const saved = localStorage.getItem("tan_thanh_uploaded_khdh");
+      if (saved) return JSON.parse(saved);
+    } catch {
+      // ignore
+    }
+    return [];
+  });
+
   // Lesson plans master state
   const [lessonPlans, setLessonPlans] = useState<KHBDLessonPlan[]>(() => {
     return buildSyncedWeekKHBD(DEFAULT_TIMETABLE_SLOTS, DEFAULT_SCHOOL_CONFIG, SAMPLE_LESSON_PLANS_WEEK_1);
@@ -65,13 +76,41 @@ export function App() {
     });
   };
 
+  const handleSaveMultipleCustomPlans = (plans: KHBDLessonPlan[]) => {
+    setCustomPlansMap((prev) => {
+      const updated = { ...prev };
+      plans.forEach((plan) => {
+        updated[plan.id] = plan;
+        if (plan.className && plan.day && plan.period) {
+          updated[`khbd_cls_${plan.className}_${plan.day}_${plan.session}_${plan.period}`] = plan;
+          updated[`cls_${plan.className}_${plan.day}_${plan.session}_${plan.period}`] = plan;
+          updated[`slot_w${plan.week || config.currentWeek}_c${plan.className}_d${plan.day}_s${plan.session}_p${plan.period}`] = plan;
+        }
+        if (plan.subject && plan.ppct) {
+          const cleanSubj = plan.subject.replace(/\s*\(.*?\)/g, "").trim();
+          updated[`subj_${cleanSubj}_g${plan.grade || config.currentGrade}_p${plan.ppct}`] = plan;
+          updated[`subj_${cleanSubj}_w${plan.week || config.currentWeek}_p${plan.ppct}`] = plan;
+        }
+      });
+      return updated;
+    });
+  };
+
   const handleApplyUploadedKHBD = (
     plans: KHBDLessonPlan[],
     targetWeek: number,
     targetGrade: GradeNumber,
     targetClass: string
   ) => {
-    // 1. Update config if target class, week, or grade differs
+    // 1. Persist uploaded KHDH for validation
+    setUploadedKhdhPlans(plans);
+    try {
+      localStorage.setItem("tan_thanh_uploaded_khdh", JSON.stringify(plans));
+    } catch {
+      // ignore
+    }
+
+    // 2. Update config if target class, week, or grade differs
     setConfig((prev) => ({
       ...prev,
       currentWeek: targetWeek,
@@ -79,7 +118,7 @@ export function App() {
       currentClass: targetClass,
     }));
 
-    // 2. Index into customPlansMap with comprehensive lookup keys
+    // 3. Index into customPlansMap with comprehensive lookup keys
     setCustomPlansMap((prev) => {
       const updated = { ...prev };
       plans.forEach((plan) => {
@@ -98,7 +137,7 @@ export function App() {
       return updated;
     });
 
-    // 3. Update master lesson plans
+    // 4. Update master lesson plans
     setLessonPlans((prev) => {
       const map = new Map<string, KHBDLessonPlan>();
       prev.forEach((p) => map.set(p.id, p));
@@ -299,6 +338,8 @@ export function App() {
             classes={classes}
             customPlansMap={customPlansMap}
             onSaveCustomPlan={handleSaveCustomPlan}
+            onSaveMultipleCustomPlans={handleSaveMultipleCustomPlans}
+            uploadedKhdhPlans={uploadedKhdhPlans}
             onOpenKHBDUpload={() => setIsKHBDUploadOpen(true)}
           />
         )}
